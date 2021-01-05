@@ -6,6 +6,7 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+// AuthEmail ...
 type AuthEmail struct {
 	Email string `json:"email"`
 }

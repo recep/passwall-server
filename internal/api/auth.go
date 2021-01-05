@@ -34,6 +34,7 @@ var (
 
 var c *cache.Cache
 
+// Create email verification code
 func CreateCode(s storage.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var signup model.AuthEmail
@@ -54,7 +55,12 @@ func CreateCode(s storage.Store) http.HandlerFunc {
 		min := 100000
 		max := 999999
 		code := strconv.Itoa(rand.Intn(max-min+1) + min)
-		fmt.Println(code)
+
+		// Print to console in the development environment
+		env := viper.GetString("server.env")
+		if env == "dev" {
+			fmt.Printf("Verification Code: %s\n", code)
+		}
 
 		// 3. store in memory
 		c = app.CreateCache(time.Minute*5, time.Minute*10)
@@ -80,6 +86,7 @@ func CreateCode(s storage.Store) http.HandlerFunc {
 	}
 }
 
+// Verify Email
 func VerifyCode() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userCode := mux.Vars(r)["code"]
