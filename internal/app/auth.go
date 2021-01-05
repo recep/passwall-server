@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"github.com/patrickmn/go-cache"
 	"strconv"
 	"time"
 
@@ -18,6 +19,11 @@ var (
 	//ErrUnauthorized represents message for unauthorized
 	ErrUnauthorized = fmt.Errorf("Unauthorized")
 )
+
+// CreateCache
+func CreateCache(defaultExpiration, cleanupInterval time.Duration) *cache.Cache {
+	return cache.New(defaultExpiration, cleanupInterval)
+}
 
 //CreateToken ...
 func CreateToken(user *model.User) (*model.TokenDetailsDTO, error) {

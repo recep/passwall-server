@@ -6,6 +6,10 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+type AuthEmail struct {
+	Email string `json:"email"`
+}
+
 //AuthLoginDTO ...
 type AuthLoginDTO struct {
 	Email          string `validate:"required" json:"email"`

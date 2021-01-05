@@ -2,7 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"github.com/patrickmn/go-cache"
+	"math/rand"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,21 +29,121 @@ var (
 	tokenCreateErr = "Token could not be created"
 	signupSuccess  = "User created successfully"
 	verifySuccess  = "Email verified successfully"
+	codeSuccess    = "Code created successfully"
 )
+
+var c *cache.Cache
+
+func CreateCode(s storage.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var signup model.AuthEmail
+		if err := json.NewDecoder(r.Body).Decode(&signup); err != nil {
+			RespondWithError(w, http.StatusBadRequest, InvalidRequestPayload)
+			return
+		}
+
+		// 1. Check if user exist in database
+		_, err := s.Users().FindByEmail(signup.Email)
+		if err == nil {
+			RespondWithError(w, http.StatusBadRequest, "User couldn't created!")
+			return
+		}
+
+		// 2. Generate a random code
+		rand.Seed(time.Now().Unix())
+		min := 100000
+		max := 999999
+		code := strconv.Itoa(rand.Intn(max-min+1) + min)
+		fmt.Println(code)
+
+		// 3. store in memory
+		c = app.CreateCache(time.Minute*5, time.Minute*10)
+		c.Set(signup.Email, code, cache.DefaultExpiration)
+
+		// 4. Send verification email to user
+		confirmationSubject := "Passwall Email Verification"
+		confirmationBody := "Please confirm your email address\n\n"
+		confirmationBody += "Verification code: " + code
+		app.SendMail(
+			"PASSWALL",
+			signup.Email,
+			confirmationSubject,
+			confirmationBody)
+
+		// Return success message
+		response := model.Response{
+			Code:    http.StatusOK,
+			Status:  Success,
+			Message: codeSuccess,
+		}
+		RespondWithJSON(w, http.StatusOK, response)
+	}
+}
+
+func VerifyCode() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userCode := mux.Vars(r)["code"]
+		email := r.FormValue("email")
+
+		code, ok := c.Get(email)
+		if !ok {
+			RespondWithError(w, http.StatusBadRequest, "Code couldn't found!")
+			return
+		}
+		confirmationCode, ok := code.(string)
+		if !ok {
+			RespondWithError(w, http.StatusInternalServerError, "Server error!")
+			return
+		}
+
+		if userCode != confirmationCode {
+			RespondWithError(w, http.StatusBadRequest, "Code couldn't found!")
+			return
+		}
+
+		c.Set("email", true, cache.DefaultExpiration)
+
+		// Return success message
+		response := model.Response{
+			Code:    http.StatusOK,
+			Status:  Success,
+			Message: verifySuccess,
+		}
+		RespondWithJSON(w, http.StatusOK, response)
+	}
+}
 
 // Signup ...
 func Signup(s storage.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// 0. Decode request body to userDTO object
 		userSignup := new(model.UserSignup)
-		decoderr := json.NewDecoder(r.Body)
-		if err := decoderr.Decode(&userSignup); err != nil {
-			RespondWithError(w, http.StatusBadRequest, "Invalid resquest payload")
+		decoder := json.NewDecoder(r.Body)
+		if err := decoder.Decode(&userSignup); err != nil {
+			RespondWithError(w, http.StatusBadRequest, "Invalid request payload")
 			return
 		}
 		defer r.Body.Close()
 
-		// 1. Run validator according to model.UserDTO validator tags
+		// 1. Check confirmation
+		confirmation, found := c.Get(userSignup.Email)
+		if !found {
+			RespondWithError(w, http.StatusBadRequest, "Email couldn't found!")
+			return
+		}
+
+		verified, ok := confirmation.(bool)
+		if !ok {
+			RespondWithError(w, http.StatusBadRequest, "Email unverified!")
+			return
+		}
+
+		if !verified {
+			RespondWithError(w, http.StatusBadRequest, "Email unverified!")
+			return
+		}
+
+		// 2. Run validator according to model.UserDTO validator tags
 		validate := validator.New()
 		validateError := validate.Struct(userSignup)
 		if validateError != nil {
@@ -65,34 +169,37 @@ func Signup(s storage.Store) http.HandlerFunc {
 			return
 		}
 
-		// 4. Create new user
+		// 4. Verify user email
+		userDTO.EmailVerifiedAt = time.Now()
+
+		// 5. Create new user
 		createdUser, err := app.CreateUser(s, userDTO)
 		if err != nil {
 			RespondWithError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
-		confirmationCode := app.RandomMD5Hash()
-		createdUser.ConfirmationCode = confirmationCode
+		//confirmationCode := app.RandomMD5Hash()
+		//createdUser.ConfirmationCode = confirmationCode
 
-		// 5. Update user once to generate schema
+		// 6. Update user once to generate schema
 		updatedUser, err := app.GenerateSchema(s, createdUser)
 		if err != nil {
 			RespondWithError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
-		// 6. Create user schema and tables
+		// 7. Create user schema and tables
 		err = s.Users().CreateSchema(updatedUser.Schema)
 		if err != nil {
 			RespondWithError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
-		// 7. Create user tables in user schema
+		// 8. Create user tables in user schema
 		app.MigrateUserTables(s, updatedUser.Schema)
 
-		// 8. Send email to admin adbout new user subscription
+		// 9. Send email to admin adbout new user subscription
 		subject := "PassWall New User Subscription"
 		body := "PassWall has new a user. User details:\n\n"
 		body += "Name: " + userDTO.Name + "\n"
@@ -104,15 +211,15 @@ func Signup(s storage.Store) http.HandlerFunc {
 			body)
 
 		// 9. Send confirmation email to new user
-		confirmationSubject := "Passwall Email Confirmation"
-		confirmationBody := "Last step for use Passwall\n\n"
-		confirmationBody += "Confirmation link: " + viper.GetString("server.domain")
-		confirmationBody += "/auth/confirm/" + userDTO.Email + "/" + confirmationCode
-		app.SendMail(
-			userDTO.Name,
-			userDTO.Email,
-			confirmationSubject,
-			confirmationBody)
+		//	confirmationSubject := "Passwall Email Confirmation"
+		//	confirmationBody := "Last step for use Passwall\n\n"
+		//	confirmationBody += "Confirmation link: " + viper.GetString("server.domain")
+		//	confirmationBody += "/auth/confirm/" + userDTO.Email + "/" + confirmationCode
+		//	app.SendMail(
+		//		userDTO.Name,
+		//		userDTO.Email,
+		//		confirmationSubject,
+		//		confirmationBody)
 
 		// Return success message
 		response := model.Response{
@@ -125,50 +232,50 @@ func Signup(s storage.Store) http.HandlerFunc {
 }
 
 // Confirm ...
-func Confirm(s storage.Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		email := mux.Vars(r)["email"]
-		code := mux.Vars(r)["code"]
-		usr, err := s.Users().FindByEmail(email)
-		if err != nil {
-			errs := []string{"Email not found!", "Raw error: " + err.Error()}
-			message := "Email couldn't confirm!"
-			RespondWithErrors(w, http.StatusBadRequest, message, errs)
-			return
-		} else if !usr.EmailVerifiedAt.IsZero() {
-			errs := []string{"Email is already verified!"}
-			message := "Email couldn't confirm!"
-			RespondWithErrors(w, http.StatusBadRequest, message, errs)
-			return
-		} else if code != usr.ConfirmationCode {
-			errs := []string{"Confirmation code is wrong!"}
-			message := "Email couldn't confirm!"
-			RespondWithErrors(w, http.StatusBadRequest, message, errs)
-			return
-		}
-
-		userDTO := model.ToUserDTO(usr)
-		userDTO.MasterPassword = "" // Fix for not to update password
-		userDTO.EmailVerifiedAt = time.Now()
-
-		_, err = app.UpdateUser(s, usr, userDTO, false)
-		if err != nil {
-			errs := []string{"User can't updated!", "Raw error: " + err.Error()}
-			message := "Email couldn't confirm!"
-			RespondWithErrors(w, http.StatusBadRequest, message, errs)
-			return
-		}
-
-		response := model.Response{
-			Code:    http.StatusOK,
-			Status:  verifySuccess,
-			Message: signupSuccess,
-		}
-
-		RespondWithJSON(w, http.StatusOK, response)
-		// RespondWithHTML(w, http.StatusOK, response)
-	}
-}
+//func Confirm(s storage.Store) http.HandlerFunc {
+//	return func(w http.ResponseWriter, r *http.Request) {
+//		email := mux.Vars(r)["email"]
+//		code := mux.Vars(r)["code"]
+//		usr, err := s.Users().FindByEmail(email)
+//		if err != nil {
+//			errs := []string{"Email not found!", "Raw error: " + err.Error()}
+//			message := "Email couldn't confirm!"
+//			RespondWithErrors(w, http.StatusBadRequest, message, errs)
+//			return
+//		} else if !usr.EmailVerifiedAt.IsZero() {
+//			errs := []string{"Email is already verified!"}
+//			message := "Email couldn't confirm!"
+//			RespondWithErrors(w, http.StatusBadRequest, message, errs)
+//			return
+//		} else if code != usr.ConfirmationCode {
+//			errs := []string{"Confirmation code is wrong!"}
+//			message := "Email couldn't confirm!"
+//			RespondWithErrors(w, http.StatusBadRequest, message, errs)
+//			return
+//		}
+//
+//		userDTO := model.ToUserDTO(usr)
+//		userDTO.MasterPassword = "" // Fix for not to update password
+//		userDTO.EmailVerifiedAt = time.Now()
+//
+//		_, err = app.UpdateUser(s, usr, userDTO, false)
+//		if err != nil {
+//			errs := []string{"User can't updated!", "Raw error: " + err.Error()}
+//			message := "Email couldn't confirm!"
+//			RespondWithErrors(w, http.StatusBadRequest, message, errs)
+//			return
+//		}
+//
+//		response := model.Response{
+//			Code:    http.StatusOK,
+//			Status:  verifySuccess,
+//			Message: signupSuccess,
+//		}
+//
+//		RespondWithJSON(w, http.StatusOK, response)
+//		// RespondWithHTML(w, http.StatusOK, response)
+//	}
+//}
 
 // Signin ...
 func Signin(s storage.Store) http.HandlerFunc {
