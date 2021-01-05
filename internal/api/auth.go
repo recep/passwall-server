@@ -108,7 +108,7 @@ func VerifyCode() http.HandlerFunc {
 			return
 		}
 
-		c.Set("email", true, cache.DefaultExpiration)
+		c.Set("email", "true", cache.DefaultExpiration)
 
 		// Return success message
 		response := model.Response{
@@ -139,13 +139,13 @@ func Signup(s storage.Store) http.HandlerFunc {
 			return
 		}
 
-		verified, ok := confirmation.(bool)
+		verified, ok := confirmation.(string)
 		if !ok {
 			RespondWithError(w, http.StatusBadRequest, "Email unverified!")
 			return
 		}
 
-		if !verified {
+		if verified == "true" {
 			RespondWithError(w, http.StatusBadRequest, "Email unverified!")
 			return
 		}
