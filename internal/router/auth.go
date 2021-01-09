@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/dgrijalva/jwt-go"
@@ -45,8 +44,8 @@ func Auth(s storage.Store) negroni.HandlerFunc {
 		tokenRow, tokenExist := s.Tokens().Any(uuid)
 
 		if !tokenExist {
-			userid, _ := strconv.Atoi(fmt.Sprintf("%.f", claims["user_id"]))
-			s.Tokens().Delete(userid)
+			// userid, _ := strconv.Atoi(fmt.Sprintf("%.f", claims["user_id"]))
+			// s.Tokens().Delete(userid)
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
