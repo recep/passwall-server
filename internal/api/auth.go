@@ -25,6 +25,7 @@ var (
 	tokenCreateErr = "Token could not be created"
 	signupSuccess  = "User created successfully"
 	verifySuccess  = "Email verified successfully"
+	logoutFromAllDevices = "Logged out from all devices successfully"
 )
 
 // Signup ...
@@ -229,6 +230,50 @@ func Signin(s storage.Store) http.HandlerFunc {
 		}
 
 		RespondWithJSON(w, 200, authLoginResponse)
+	}
+}
+
+// Logout from all devices
+func LogoutAll(s storage.Store) http.HandlerFunc  {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var tokenStr string
+		bearerToken := r.Header.Get("Authorization")
+		strArr := strings.Split(bearerToken, " ")
+		if len(strArr) == 2 {
+			tokenStr = strArr[1]
+		}
+
+		if tokenStr == "" {
+			RespondWithError(w, http.StatusUnauthorized, noToken)
+			return
+		}
+
+		token, err := app.TokenValid(tokenStr)
+		if err != nil {
+			RespondWithError(w, http.StatusUnauthorized, invalidToken)
+			return
+		}
+
+		claims := token.Claims.(jwt.MapClaims)
+		uuid := claims["uuid"].(string)
+
+		// Check if user exist in database and credentials are true
+		userToken, ok := s.Tokens().Any(uuid)
+		if !ok {
+			RespondWithError(w, http.StatusUnauthorized, invalidUser)
+			return
+		}
+
+		// delete user's tokens from db
+		s.Tokens().Delete(userToken.UserID)
+
+		response := model.Response{
+			Code:    http.StatusOK,
+			Status:  Success,
+			Message: logoutFromAllDevices,
+		}
+
+		RespondWithJSON(w,http.StatusOK,response)
 	}
 }
 
