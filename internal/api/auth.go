@@ -212,9 +212,6 @@ func Signin(s storage.Store) http.HandlerFunc {
 			return
 		}
 
-		//delete tokens from db
-		s.Tokens().Delete(int(user.ID))
-
 		//create tokens on db
 		s.Tokens().Save(int(user.ID), token.AtUUID, token.AccessToken, token.AtExpiresTime, token.TransmissionKey)
 		s.Tokens().Save(int(user.ID), token.RtUUID, token.RefreshToken, token.RtExpiresTime, "")
